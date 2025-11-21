@@ -1,6 +1,350 @@
+import type { BlockCheckResult } from "../types";
+
 export default defineContentScript({
-  matches: ['*://*.google.com/*'],
+  matches: ["<all_urls>"],
   main() {
-    console.log('Hello content.');
+    checkAndBlockPage();
+
+    // Listen for messages from background
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message.type === "SHOW_BLOCK_SCREEN") {
+        showBlockScreen(message.data);
+      }
+    });
   },
 });
+
+async function checkAndBlockPage() {
+  const result: BlockCheckResult = await chrome.runtime.sendMessage({
+    type: "CHECK_BLOCKED",
+    url: window.location.href,
+  });
+
+  if (result.isBlocked && !result.hasActiveGrace) {
+    showBlockScreen(result);
+  }
+}
+
+function showBlockScreen(data: BlockCheckResult) {
+  // Remove existing block screen if any
+  const existing = document.getElementById("website-blocker-overlay");
+  if (existing) existing.remove();
+
+  // Create overlay
+  const overlay = document.createElement("div");
+  overlay.id = "website-blocker-overlay";
+  overlay.innerHTML = `
+    <style>
+      #website-blocker-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        z-index: 999999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      
+      .blocker-card {
+        background: white;
+        border-radius: 20px;
+        padding: 48px;
+        max-width: 500px;
+        width: 90%;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        text-align: center;
+      }
+      
+      .blocker-icon {
+        font-size: 64px;
+        margin-bottom: 24px;
+      }
+      
+      .blocker-title {
+        font-size: 28px;
+        font-weight: 700;
+        color: #1a202c;
+        margin-bottom: 16px;
+      }
+      
+      .blocker-message {
+        font-size: 16px;
+        color: #4a5568;
+        margin-bottom: 32px;
+        line-height: 1.6;
+      }
+      
+      .blocker-url {
+        background: #f7fafc;
+        padding: 12px;
+        border-radius: 8px;
+        font-family: monospace;
+        font-size: 14px;
+        color: #2d3748;
+        margin-bottom: 32px;
+        word-break: break-all;
+      }
+      
+      .blocker-buttons {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      
+      .blocker-btn {
+        padding: 14px 28px;
+        border: none;
+        border-radius: 10px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+      }
+      
+      .blocker-btn-primary {
+        background: #667eea;
+        color: white;
+      }
+      
+      .blocker-btn-primary:hover {
+        background: #5568d3;
+        transform: translateY(-2px);
+      }
+      
+      .blocker-btn-secondary {
+        background: #e2e8f0;
+        color: #2d3748;
+      }
+      
+      .blocker-btn-secondary:hover {
+        background: #cbd5e0;
+      }
+      
+      .key-input-container {
+        margin-top: 24px;
+        display: none;
+      }
+      
+      .key-input-container.active {
+        display: block;
+      }
+      
+      .blocker-input {
+        width: 100%;
+        padding: 14px;
+        border: 2px solid #e2e8f0;
+        border-radius: 10px;
+        font-size: 16px;
+        margin-bottom: 12px;
+        text-align: center;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-weight: 600;
+      }
+      
+      .blocker-input:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+      
+      .error-message {
+        color: #e53e3e;
+        font-size: 14px;
+        margin-top: 12px;
+      }
+      
+      .grace-info {
+        background: #fef5e7;
+        border-left: 4px solid #f39c12;
+        padding: 16px;
+        border-radius: 8px;
+        margin-bottom: 24px;
+        text-align: left;
+      }
+      
+      .grace-info-title {
+        font-weight: 600;
+        color: #d68910;
+        margin-bottom: 8px;
+      }
+      
+      .grace-key {
+        font-family: monospace;
+        background: white;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 18px;
+        font-weight: 700;
+        color: #667eea;
+        letter-spacing: 2px;
+        display: inline-block;
+        margin-top: 8px;
+      }
+    </style>
+    
+    <div class="blocker-card">
+      <div class="blocker-icon">🚫</div>
+      <h1 class="blocker-title">Site Blocked</h1>
+      <p class="blocker-message">
+        This website has been blocked. You can request a grace period to access it temporarily.
+      </p>
+      <div class="blocker-url">${escapeHtml(window.location.href)}</div>
+      
+      <div id="grace-info-container"></div>
+      
+      <div class="blocker-buttons">
+        <button class="blocker-btn blocker-btn-primary" id="request-grace-btn">
+          Request Grace Period
+        </button>
+        <button class="blocker-btn blocker-btn-secondary" id="enter-key-btn">
+          Enter Access Key
+        </button>
+        <button class="blocker-btn blocker-btn-secondary" id="go-back-btn">
+          Go Back
+        </button>
+      </div>
+      
+      <div class="key-input-container" id="key-input-container">
+        <input 
+          type="text" 
+          class="blocker-input" 
+          id="key-input" 
+          placeholder="XXXX-XXXX"
+          maxlength="9"
+        />
+        <button class="blocker-btn blocker-btn-primary" id="verify-key-btn">
+          Verify Key
+        </button>
+        <div class="error-message" id="error-message"></div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  // Event listeners
+  document
+    .getElementById("request-grace-btn")
+    ?.addEventListener("click", requestGracePeriod);
+  document
+    .getElementById("enter-key-btn")
+    ?.addEventListener("click", showKeyInput);
+  document
+    .getElementById("verify-key-btn")
+    ?.addEventListener("click", verifyKey);
+  document
+    .getElementById("go-back-btn")
+    ?.addEventListener("click", () => window.history.back());
+
+  // Format key input
+  const keyInput = document.getElementById("key-input") as HTMLInputElement;
+  keyInput?.addEventListener("input", (e) => {
+    const target = e.target as HTMLInputElement;
+    let value = target.value.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    if (value.length > 4) {
+      value = value.slice(0, 4) + "-" + value.slice(4, 8);
+    }
+    target.value = value;
+  });
+}
+
+async function requestGracePeriod() {
+  const btn = document.getElementById("request-grace-btn") as HTMLButtonElement;
+  btn.disabled = true;
+  btn.textContent = "Requesting...";
+
+  const response = await chrome.runtime.sendMessage({
+    type: "REQUEST_GRACE_PERIOD",
+    url: window.location.href,
+  });
+
+  if (response.success) {
+    const duration = Math.ceil(response.gracePeriod.duration / 1000);
+    const minutes = Math.floor(duration / 60);
+    const seconds = duration % 60;
+    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+
+    const infoContainer = document.getElementById("grace-info-container");
+    if (infoContainer) {
+      infoContainer.innerHTML = `
+        <div class="grace-info">
+          <div class="grace-info-title">✓ Grace Period Granted!</div>
+          <p style="margin: 8px 0; color: #6c757d; font-size: 14px;">
+            Duration: ${timeStr}<br>
+            Save this key to unlock later:
+          </p>
+          <div class="grace-key">${response.gracePeriod.key}</div>
+          <p style="margin-top: 12px; font-size: 13px; color: #6c757d;">
+            The page will reload automatically...
+          </p>
+        </div>
+      `;
+    }
+
+    // Page will reload automatically from background script
+  } else {
+    const errorDiv = document.getElementById("error-message");
+    if (errorDiv) {
+      errorDiv.textContent = response.error || "Failed to request grace period";
+    }
+    btn.disabled = false;
+    btn.textContent = "Request Grace Period";
+  }
+}
+
+function showKeyInput() {
+  const container = document.getElementById("key-input-container");
+  const errorDiv = document.getElementById("error-message");
+  if (container) {
+    container.classList.add("active");
+  }
+  if (errorDiv) {
+    errorDiv.textContent = "";
+  }
+  document.getElementById("key-input")?.focus();
+}
+
+async function verifyKey() {
+  const input = document.getElementById("key-input") as HTMLInputElement;
+  const errorDiv = document.getElementById("error-message");
+  const key = input.value.trim();
+
+  if (!key || key.length < 8) {
+    if (errorDiv) errorDiv.textContent = "Please enter a valid key";
+    return;
+  }
+
+  const btn = document.getElementById("verify-key-btn") as HTMLButtonElement;
+  btn.disabled = true;
+  btn.textContent = "Verifying...";
+
+  const response = await chrome.runtime.sendMessage({
+    type: "VERIFY_KEY",
+    key: key,
+  });
+
+  if (response.success) {
+    if (errorDiv) {
+      errorDiv.style.color = "#48bb78";
+      errorDiv.textContent = "✓ Key verified! Reloading...";
+    }
+    // Page will reload from background script
+  } else {
+    if (errorDiv) {
+      errorDiv.style.color = "#e53e3e";
+      errorDiv.textContent = response.error || "Invalid or expired key";
+    }
+    btn.disabled = false;
+    btn.textContent = "Verify Key";
+  }
+}
+
+function escapeHtml(text: string): string {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
