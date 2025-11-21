@@ -1,8 +1,15 @@
 import type { BlockCheckResult } from "../types";
 
+// Prevent multiple initializations
+let initialized = false;
+
 export default defineContentScript({
   matches: ["<all_urls>"],
   main() {
+    if (initialized) return;
+    initialized = true;
+
+    // Only check once when script loads
     checkAndBlockPage();
 
     // Listen for messages from background
@@ -15,20 +22,37 @@ export default defineContentScript({
 });
 
 async function checkAndBlockPage() {
-  const result: BlockCheckResult = await chrome.runtime.sendMessage({
-    type: "CHECK_BLOCKED",
-    url: window.location.href,
-  });
+  // Don't check internal pages
+  if (
+    window.location.href.startsWith("chrome://") ||
+    window.location.href.startsWith("chrome-extension://")
+  ) {
+    return;
+  }
 
-  if (result.isBlocked && !result.hasActiveGrace) {
-    showBlockScreen(result);
+  try {
+    const result: BlockCheckResult = await chrome.runtime.sendMessage({
+      type: "CHECK_BLOCKED",
+      url: window.location.href,
+    });
+
+    if (result.isBlocked && !result.hasActiveGrace) {
+      showBlockScreen(result);
+    }
+  } catch (error) {
+    console.error("Error checking blocked status:", error);
   }
 }
 
 function showBlockScreen(data: BlockCheckResult) {
-  // Remove existing block screen if any
+  // Check if overlay already exists
   const existing = document.getElementById("website-blocker-overlay");
-  if (existing) existing.remove();
+  if (existing) return; // Don't create duplicate
+
+  // Stop the page from loading further
+  if (document.readyState === "loading") {
+    window.stop();
+  }
 
   // Create overlay
   const overlay = document.createElement("div");
@@ -42,7 +66,7 @@ function showBlockScreen(data: BlockCheckResult) {
         width: 100%;
         height: 100%;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        z-index: 999999;
+        z-index: 2147483647;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -105,12 +129,17 @@ function showBlockScreen(data: BlockCheckResult) {
         transition: all 0.3s;
       }
       
+      .blocker-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      
       .blocker-btn-primary {
         background: #667eea;
         color: white;
       }
       
-      .blocker-btn-primary:hover {
+      .blocker-btn-primary:hover:not(:disabled) {
         background: #5568d3;
         transform: translateY(-2px);
       }
@@ -224,6 +253,7 @@ function showBlockScreen(data: BlockCheckResult) {
     </div>
   `;
 
+  document.body.innerHTML = "";
   document.body.appendChild(overlay);
 
   // Event listeners
@@ -257,40 +287,47 @@ async function requestGracePeriod() {
   btn.disabled = true;
   btn.textContent = "Requesting...";
 
-  const response = await chrome.runtime.sendMessage({
-    type: "REQUEST_GRACE_PERIOD",
-    url: window.location.href,
-  });
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "REQUEST_GRACE_PERIOD",
+      url: window.location.href,
+    });
 
-  if (response.success) {
-    const duration = Math.ceil(response.gracePeriod.duration / 1000);
-    const minutes = Math.floor(duration / 60);
-    const seconds = duration % 60;
-    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+    if (response.success) {
+      const duration = Math.ceil(response.gracePeriod.duration / 1000);
+      const minutes = Math.floor(duration / 60);
+      const seconds = duration % 60;
+      const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 
-    const infoContainer = document.getElementById("grace-info-container");
-    if (infoContainer) {
-      infoContainer.innerHTML = `
-        <div class="grace-info">
-          <div class="grace-info-title">✓ Grace Period Granted!</div>
-          <p style="margin: 8px 0; color: #6c757d; font-size: 14px;">
-            Duration: ${timeStr}<br>
-            Save this key to unlock later:
-          </p>
-          <div class="grace-key">${response.gracePeriod.key}</div>
-          <p style="margin-top: 12px; font-size: 13px; color: #6c757d;">
-            The page will reload automatically...
-          </p>
-        </div>
-      `;
+      const infoContainer = document.getElementById("grace-info-container");
+      if (infoContainer) {
+        infoContainer.innerHTML = `
+          <div class="grace-info">
+            <div class="grace-info-title">✓ Grace Period Granted!</div>
+            <p style="margin: 8px 0; color: #6c757d; font-size: 14px;">
+              Duration: ${timeStr}<br>
+              Save this key to unlock later:
+            </p>
+            <div class="grace-key">${response.gracePeriod.key}</div>
+            <p style="margin-top: 12px; font-size: 13px; color: #6c757d;">
+              The page will reload automatically...
+            </p>
+          </div>
+        `;
+      }
+
+      // Page will reload automatically from background script
+    } else {
+      const errorDiv = document.getElementById("error-message");
+      if (errorDiv) {
+        errorDiv.textContent =
+          response.error || "Failed to request grace period";
+      }
+      btn.disabled = false;
+      btn.textContent = "Request Grace Period";
     }
-
-    // Page will reload automatically from background script
-  } else {
-    const errorDiv = document.getElementById("error-message");
-    if (errorDiv) {
-      errorDiv.textContent = response.error || "Failed to request grace period";
-    }
+  } catch (error) {
+    console.error("Error requesting grace period:", error);
     btn.disabled = false;
     btn.textContent = "Request Grace Period";
   }
@@ -322,21 +359,31 @@ async function verifyKey() {
   btn.disabled = true;
   btn.textContent = "Verifying...";
 
-  const response = await chrome.runtime.sendMessage({
-    type: "VERIFY_KEY",
-    key: key,
-  });
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "VERIFY_KEY",
+      key: key,
+    });
 
-  if (response.success) {
-    if (errorDiv) {
-      errorDiv.style.color = "#48bb78";
-      errorDiv.textContent = "✓ Key verified! Reloading...";
+    if (response.success) {
+      if (errorDiv) {
+        errorDiv.style.color = "#48bb78";
+        errorDiv.textContent = "✓ Key verified! Reloading...";
+      }
+      // Page will reload from background script
+    } else {
+      if (errorDiv) {
+        errorDiv.style.color = "#e53e3e";
+        errorDiv.textContent = response.error || "Invalid or expired key";
+      }
+      btn.disabled = false;
+      btn.textContent = "Verify Key";
     }
-    // Page will reload from background script
-  } else {
+  } catch (error) {
+    console.error("Error verifying key:", error);
     if (errorDiv) {
       errorDiv.style.color = "#e53e3e";
-      errorDiv.textContent = response.error || "Invalid or expired key";
+      errorDiv.textContent = "Error verifying key";
     }
     btn.disabled = false;
     btn.textContent = "Verify Key";

@@ -7,26 +7,66 @@ export default defineBackground(() => {
     await storage.removeExpiredGracePeriods();
   }, 60000); // Every minute
 
-  // Listen for navigation events
-  chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
-    if (details.frameId !== 0) return; // Only main frame
+  // Track tabs we've already checked to avoid loops
+  const checkedTabs = new Set<string>();
 
-    const result = await checkIfBlocked(details.url);
+  // Listen for tab updates instead of navigation
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    // Only proceed when page is loading and we have a URL
+    if (changeInfo.status !== "loading" || !tab.url) return;
+
+    // Skip internal pages
+    if (
+      tab.url.startsWith("chrome://") ||
+      tab.url.startsWith("chrome-extension://")
+    )
+      return;
+
+    const tabKey = `${tabId}-${tab.url}`;
+
+    // Skip if we've already checked this tab-url combination recently
+    if (checkedTabs.has(tabKey)) return;
+
+    checkedTabs.add(tabKey);
+
+    // Remove from checked set after 2 seconds to allow re-checking
+    setTimeout(() => checkedTabs.delete(tabKey), 2000);
+
+    const result = await checkIfBlocked(tab.url);
 
     if (result.isBlocked && !result.hasActiveGrace) {
-      // Inject content script to show block screen
-      chrome.tabs
-        .sendMessage(details.tabId, {
-          type: "SHOW_BLOCK_SCREEN",
-          data: result,
-        })
-        .catch(() => {
-          // If content script not ready, inject it
-          chrome.scripting.executeScript({
-            target: { tabId: details.tabId },
-            files: ["/content-scripts/content.js"],
+      // Wait a bit to ensure content script is ready
+      setTimeout(() => {
+        chrome.tabs
+          .sendMessage(tabId, {
+            type: "SHOW_BLOCK_SCREEN",
+            data: result,
+          })
+          .catch(() => {
+            // Content script not ready, inject it
+            chrome.scripting
+              .executeScript({
+                target: { tabId: tabId },
+                files: ["/content-scripts/content.js"],
+              })
+              .then(() => {
+                // Try sending message again after injection
+                setTimeout(() => {
+                  chrome.tabs
+                    .sendMessage(tabId, {
+                      type: "SHOW_BLOCK_SCREEN",
+                      data: result,
+                    })
+                    .catch(() => {
+                      console.log("Could not send message to tab", tabId);
+                    });
+                }, 100);
+              })
+              .catch((err) => {
+                console.error("Failed to inject content script:", err);
+              });
           });
-        });
+      }, 100);
     }
   });
 
@@ -94,7 +134,9 @@ async function handleMessage(message: any, sender: any) {
 
       // Reload the tab to apply grace period
       if (sender.tab?.id) {
-        chrome.tabs.reload(sender.tab.id);
+        setTimeout(() => {
+          chrome.tabs.reload(sender.tab.id);
+        }, 100);
       }
 
       return { success: true, gracePeriod };
@@ -108,7 +150,9 @@ async function handleMessage(message: any, sender: any) {
       if (grace) {
         // Reload tab to apply the grace period
         if (sender.tab?.id) {
-          chrome.tabs.reload(sender.tab.id);
+          setTimeout(() => {
+            chrome.tabs.reload(sender.tab.id);
+          }, 100);
         }
         return { success: true };
       }
