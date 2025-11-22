@@ -1,129 +1,152 @@
-import type {
-  StorageData,
-  BlockedSite,
-  GracePeriod,
-  GracePeriodHistory,
-} from "../types";
+import { blockerStorage } from "../utils/storage";
+import type { BlockCheckResult } from "../types";
 
-const STORAGE_KEY = "website_blocker_data";
+export default defineBackground({
+  main() {
+    // Check and clean up expired grace periods periodically
+    setInterval(async () => {
+      await blockerStorage.removeExpiredGracePeriods();
+    }, 60000); // Every minute
 
-const defaultData: StorageData = {
-  blockedSites: [],
-  activeGracePeriods: [],
-  gracePeriodHistory: [],
-};
+    // Track tabs we've already checked to avoid loops
+    const checkedTabs = new Set<string>();
 
-export const storage = {
-  async get(): Promise<StorageData> {
-    const result = await chrome.storage.local.get(STORAGE_KEY);
-    return result[STORAGE_KEY] || defaultData;
-  },
+    // Listen for tab updates instead of navigation
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+      // Only proceed when page is loading and we have a URL
+      if (changeInfo.status !== "loading" || !tab.url) return;
 
-  async set(data: StorageData): Promise<void> {
-    await chrome.storage.local.set({ [STORAGE_KEY]: data });
-  },
+      // Skip internal pages
+      if (
+        tab.url.startsWith("chrome://") ||
+        tab.url.startsWith("chrome-extension://")
+      )
+        return;
 
-  async addBlockedSite(url: string): Promise<BlockedSite> {
-    const data = await this.get();
-    const site: BlockedSite = {
-      id: crypto.randomUUID(),
-      url,
-      pattern: this.urlToPattern(url),
-      addedAt: Date.now(),
-    };
-    data.blockedSites.push(site);
-    await this.set(data);
-    return site;
-  },
+      const tabKey = `${tabId}-${tab.url}`;
 
-  async removeBlockedSite(id: string): Promise<void> {
-    const data = await this.get();
-    data.blockedSites = data.blockedSites.filter((site) => site.id !== id);
-    await this.set(data);
-  },
+      // Skip if we've already checked this tab-url combination recently
+      if (checkedTabs.has(tabKey)) return;
 
-  async addGracePeriod(url: string, duration: number): Promise<GracePeriod> {
-    const data = await this.get();
-    const key = this.generateUniqueKey();
-    const gracePeriod: GracePeriod = {
-      key,
-      url,
-      expiresAt: Date.now() + duration,
-      duration,
-    };
-    data.activeGracePeriods.push(gracePeriod);
+      checkedTabs.add(tabKey);
 
-    // Add to history
-    const hour = this.getCurrentHour();
-    data.gracePeriodHistory.push({ timestamp: Date.now(), hour });
+      // Remove from checked set after 2 seconds to allow re-checking
+      setTimeout(() => checkedTabs.delete(tabKey), 2000);
 
-    // Clean up old history (keep only last 24 hours)
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    data.gracePeriodHistory = data.gracePeriodHistory.filter(
-      (h) => h.timestamp > oneDayAgo,
-    );
+      const result = await checkIfBlocked(tab.url);
 
-    await this.set(data);
-    return gracePeriod;
-  },
+      if (result.isBlocked && !result.hasActiveGrace) {
+        // Wait a bit to ensure content script is ready
+        setTimeout(() => {
+          chrome.tabs
+            .sendMessage(tabId, {
+              type: "SHOW_BLOCK_SCREEN",
+              data: result,
+            })
+            .catch(() => {
+              // Content script not ready, inject it
+              chrome.scripting
+                .executeScript({
+                  target: { tabId: tabId },
+                  files: ["/content-scripts/content.js"],
+                })
+                .then(() => {
+                  // Try sending message again after injection
+                  setTimeout(() => {
+                    chrome.tabs
+                      .sendMessage(tabId, {
+                        type: "SHOW_BLOCK_SCREEN",
+                        data: result,
+                      })
+                      .catch(() => {
+                        console.log("Could not send message to tab", tabId);
+                      });
+                  }, 100);
+                })
+                .catch((err) => {
+                  console.error("Failed to inject content script:", err);
+                });
+            });
+        }, 100);
+      }
+    });
 
-  async removeExpiredGracePeriods(): Promise<void> {
-    const data = await this.get();
-    const now = Date.now();
-    data.activeGracePeriods = data.activeGracePeriods.filter(
-      (gp) => gp.expiresAt > now,
-    );
-    await this.set(data);
-  },
+    // Message handler
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      handleMessage(message, sender).then(sendResponse);
+      return true; // Keep channel open for async response
+    });
 
-  async getGracePeriodCount(): Promise<number> {
-    const data = await this.get();
-    const currentHour = this.getCurrentHour();
-    return data.gracePeriodHistory.filter((h) => h.hour === currentHour).length;
-  },
+    async function checkIfBlocked(url: string): Promise<BlockCheckResult> {
+      const data = await blockerStorage.get();
 
-  async canRequestGracePeriod(): Promise<boolean> {
-    const count = await this.getGracePeriodCount();
-    return count < 3;
-  },
+      // Check if URL matches any blocked site
+      const blockedSite = data.blockedSites.find((site) => {
+        try {
+          const regex = new RegExp(site.pattern);
+          return regex.test(url);
+        } catch {
+          return url.includes(site.url);
+        }
+      });
 
-  urlToPattern(url: string): string {
-    try {
-      const urlObj = new URL(url.startsWith("http") ? url : `https://${url}`);
-      const hostname = urlObj.hostname.replace(/\./g, "\\.");
-      const pathname = urlObj.pathname;
-
-      // If there's a specific path, include it in the pattern
-      if (pathname && pathname !== "/") {
-        const pathPattern = pathname.replace(/\./g, "\\.").replace(/\*/g, ".*");
-        return `^https?://(www\\.)?${hostname}${pathPattern}.*`;
+      if (!blockedSite) {
+        return { isBlocked: false, hasActiveGrace: false };
       }
 
-      // Otherwise just match the hostname
-      return `^https?://(www\\.)?${hostname}.*`;
-    } catch {
-      return url.replace(/\./g, "\\.").replace(/\*/g, ".*");
+      // Check for active grace period that matches this specific blocked site
+      const activeGrace = data.activeGracePeriods.find((gp) => {
+        // Match by the blocked site URL, not the current URL
+        return gp.url === blockedSite.url && gp.expiresAt > Date.now();
+      });
+
+      return {
+        isBlocked: true,
+        hasActiveGrace: !!activeGrace,
+        gracePeriod: activeGrace,
+        site: blockedSite,
+      };
+    }
+
+    async function handleMessage(message: any, sender: any) {
+      switch (message.type) {
+        case "CHECK_BLOCKED":
+          return await checkIfBlocked(message.url);
+
+        case "REQUEST_GRACE_PERIOD":
+          const canRequest = await blockerStorage.canRequestGracePeriod();
+          if (!canRequest) {
+            return {
+              success: false,
+              error: "Maximum 3 grace periods per hour reached",
+            };
+          }
+
+          const duration = blockerStorage.getRandomDuration();
+          const gracePeriod = await blockerStorage.addGracePeriod(
+            message.url,
+            duration,
+          );
+
+          // Don't reload automatically - let user save the key first
+          return { success: true, gracePeriod };
+
+        case "VERIFY_KEY":
+          const data = await blockerStorage.get();
+          const grace = data.activeGracePeriods.find(
+            (gp) => gp.key === message.key && gp.expiresAt > Date.now(),
+          );
+
+          if (grace) {
+            // Don't reload - let content script handle it
+            return { success: true };
+          }
+
+          return { success: false, error: "Invalid or expired key" };
+
+        default:
+          return { success: false, error: "Unknown message type" };
+      }
     }
   },
-
-  generateUniqueKey(): string {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let key = "";
-    for (let i = 0; i < 8; i++) {
-      key += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return key.match(/.{1,4}/g)?.join("-") || key;
-  },
-
-  getCurrentHour(): string {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}`;
-  },
-
-  getRandomDuration(): number {
-    // Random duration between 30 seconds and 9 minutes (in milliseconds)
-    const minMs = 30 * 1000;
-    const maxMs = 9 * 60 * 1000;
-    return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
-  },
-};
+});
