@@ -275,8 +275,6 @@ and how does it differ from traditional Chrome extension development?
 - Supports hot module replacement
 - Framework-agnostic with React/Vue/Svelte support
 
-**Evaluation:** ⭐⭐⭐⭐⭐ (5/5)  
-Very clear explanation. Helped understand core concepts immediately.
 
 ---
 
@@ -296,8 +294,6 @@ Design a Chrome extension architecture for a website blocker with these features
 - Chrome storage API for persistence
 - Popup for management interface
 
-**Evaluation:** ⭐⭐⭐⭐ (4/5)  
-Good architecture but needed refinement for grace period implementation.
 
 ---
 
@@ -316,8 +312,7 @@ Create a TypeScript utility module for Chrome extension storage that handles:
 - Implemented hourly tracking using timestamp-based keys
 - Included helper functions for URL pattern matching
 
-**Evaluation:** ⭐⭐⭐⭐⭐ (5/5)  
-Production-ready code with minimal modifications needed.
+
 
 ---
 
@@ -333,8 +328,6 @@ The current regex treats them the same.
 - Modified urlToPattern function to handle paths
 - Explained difference between hostname-only and path-specific blocking
 
-**Evaluation:** ⭐⭐⭐⭐⭐ (5/5)  
-Solved the issue perfectly. Now paths are treated independently.
 
 ---
 
@@ -350,8 +343,6 @@ users time to save it. How do I fix this?
 - Added "Unlock Site Now" button in UI
 - User manually triggers reload after saving key
 
-**Evaluation:** ⭐⭐⭐⭐⭐ (5/5)  
-Perfect solution. Much better user experience.
 
 ---
 
@@ -367,8 +358,6 @@ top-right corner instead of blocking the page completely.
 - Floating timer with countdown
 - Auto-blocks when time expires
 
-**Evaluation:** ⭐⭐⭐⭐⭐ (5/5)  
-Beautiful implementation with smooth animations.
 
 ---
 
@@ -558,7 +547,7 @@ npm run build
 ### GitHub Examples
 - **WXT Examples:** https://github.com/wxt-dev/wxt/tree/main/examples
 - **Chrome Extension Samples:** https://github.com/GoogleChrome/chrome-extensions-samples
-- **This Project:** [Your GitHub Repository URL]
+- **This Project:** https://github.com/andareomondi/web-blocker.git
 
 ---
 
@@ -617,8 +606,8 @@ npm run build
 ## 11. Testing & Iteration
 
 ### Peer Testing Session
-**Tester:** [Peer Name]  
-**Date:** [Testing Date]
+**Tester:** Omondi Shadrack Andare  
+**Date:** 22 November, 2025
 
 **Feedback Received:**
 1. ✅ "Easy to understand and install"
@@ -647,14 +636,6 @@ npm run build
 
 ## 12. Future Enhancements
 
-### Planned Features
-- [ ] Schedule-based blocking (work hours only)
-- [ ] Category presets (Social Media, News, Entertainment)
-- [ ] Usage statistics and analytics
-- [ ] Export/import blocked sites list
-- [ ] Sync across devices
-- [ ] Custom grace period durations
-- [ ] Whitelist mode (allow only certain sites)
 
 ### Technical Improvements
 - [ ] Unit tests for core functionality
@@ -676,10 +657,9 @@ The Website Blocker extension is not just a functional tool—it's a testament t
 
 ---
 
-**Project Repository:** [GitHub Link]  
-**Live Demo:** [Video/Screenshots]  
-**Contact:** [Your Email/LinkedIn]
+**Project Repository:** https://github.com/andareomondi/web-blocker.git  
 
 ---
 
-*Built with ❤️ using WXT, React, TypeScript, and Claude AI*
+*Built with lots of coffee using WXT, React, TypeScript, and Claude AI*
+
