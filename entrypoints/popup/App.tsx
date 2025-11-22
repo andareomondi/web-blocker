@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { storage } from '../../utils/storage';
-import type { BlockedSite, GracePeriod } from '../../types';
+import { blockerStorage } from '@/utils/storage';
+import type { BlockedSite, GracePeriod } from '@/types';
 import './App.css';
 
 function App() {
@@ -17,10 +17,10 @@ function App() {
   }, []);
 
   const loadData = async () => {
-    const data = await storage.get();
+    const data = await blockerStorage.get();
     setBlockedSites(data.blockedSites);
     setActiveGracePeriods(data.activeGracePeriods.filter(gp => gp.expiresAt > Date.now()));
-    const count = await storage.getGracePeriodCount();
+    const count = await blockerStorage.getGracePeriodCount();
     setGracePeriodCount(count);
     setLoading(false);
   };
@@ -29,13 +29,13 @@ function App() {
     e.preventDefault();
     if (!newUrl.trim()) return;
 
-    await storage.addBlockedSite(newUrl.trim());
+    await blockerStorage.addBlockedSite(newUrl.trim());
     setNewUrl('');
     loadData();
   };
 
   const removeSite = async (id: string) => {
-    await storage.removeBlockedSite(id);
+    await blockerStorage.removeBlockedSite(id);
     loadData();
   };
 

@@ -3,7 +3,7 @@ import type {
   BlockedSite,
   GracePeriod,
   GracePeriodHistory,
-} from "../types";
+} from "@/types";
 
 const STORAGE_KEY = "website_blocker_data";
 
@@ -13,7 +13,7 @@ const defaultData: StorageData = {
   gracePeriodHistory: [],
 };
 
-export const storage = {
+export const blockerStorage = {
   async get(): Promise<StorageData> {
     const result = await chrome.storage.local.get(STORAGE_KEY);
     return result[STORAGE_KEY] || defaultData;

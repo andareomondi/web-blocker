@@ -1,5 +1,5 @@
-import { blockerStorage } from "../utils/storage";
-import type { BlockCheckResult } from "../types";
+import { blockerStorage } from "@/utils/storage";
+import type { BlockCheckResult } from "@/types";
 
 export default defineBackground({
   main() {
