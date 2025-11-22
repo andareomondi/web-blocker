@@ -42,12 +42,26 @@ export const storage = {
     await this.set(data);
   },
 
-  async addGracePeriod(url: string, duration: number): Promise<GracePeriod> {
+  async addGracePeriod(
+    siteUrl: string,
+    duration: number,
+  ): Promise<GracePeriod> {
     const data = await this.get();
     const key = this.generateUniqueKey();
+
+    // Find the blocked site that matches this URL to use its base URL
+    const matchingSite = data.blockedSites.find((site) => {
+      try {
+        const regex = new RegExp(site.pattern);
+        return regex.test(siteUrl);
+      } catch {
+        return siteUrl.includes(site.url);
+      }
+    });
+
     const gracePeriod: GracePeriod = {
       key,
-      url,
+      url: matchingSite ? matchingSite.url : siteUrl, // Store the base blocked site URL
       expiresAt: Date.now() + duration,
       duration,
     };
@@ -91,6 +105,15 @@ export const storage = {
     try {
       const urlObj = new URL(url.startsWith("http") ? url : `https://${url}`);
       const hostname = urlObj.hostname.replace(/\./g, "\\.");
+      const pathname = urlObj.pathname;
+
+      // If there's a specific path, include it in the pattern
+      if (pathname && pathname !== "/") {
+        const pathPattern = pathname.replace(/\./g, "\\.").replace(/\*/g, ".*");
+        return `^https?://(www\\.)?${hostname}${pathPattern}.*`;
+      }
+
+      // Otherwise just match the hostname
       return `^https?://(www\\.)?${hostname}.*`;
     } catch {
       return url.replace(/\./g, "\\.").replace(/\*/g, ".*");

@@ -38,6 +38,13 @@ async function checkAndBlockPage() {
 
     if (result.isBlocked && !result.hasActiveGrace) {
       showBlockScreen(result);
+    } else if (
+      result.isBlocked &&
+      result.hasActiveGrace &&
+      result.gracePeriod
+    ) {
+      // Show timer overlay instead of full block
+      showTimerOverlay(result.gracePeriod);
     }
   } catch (error) {
     console.error("Error checking blocked status:", error);
@@ -284,6 +291,11 @@ function showBlockScreen(data: BlockCheckResult) {
 
 async function requestGracePeriod() {
   const btn = document.getElementById("request-grace-btn") as HTMLButtonElement;
+  const graceInfoContainer = document.getElementById("grace-info-container");
+  const buttonsContainer = document.querySelector(
+    ".blocker-buttons",
+  ) as HTMLElement;
+
   btn.disabled = true;
   btn.textContent = "Requesting...";
 
@@ -299,24 +311,45 @@ async function requestGracePeriod() {
       const seconds = duration % 60;
       const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 
-      const infoContainer = document.getElementById("grace-info-container");
-      if (infoContainer) {
-        infoContainer.innerHTML = `
+      if (graceInfoContainer) {
+        graceInfoContainer.innerHTML = `
           <div class="grace-info">
             <div class="grace-info-title">✓ Grace Period Granted!</div>
             <p style="margin: 8px 0; color: #6c757d; font-size: 14px;">
               Duration: ${timeStr}<br>
-              Save this key to unlock later:
+              <strong>Save this key - you'll need it!</strong>
             </p>
             <div class="grace-key">${response.gracePeriod.key}</div>
             <p style="margin-top: 12px; font-size: 13px; color: #6c757d;">
-              The page will reload automatically...
+              Click the button below to unlock the site with this key.
             </p>
           </div>
         `;
       }
 
-      // Page will reload automatically from background script
+      // Replace buttons with unlock option
+      if (buttonsContainer) {
+        buttonsContainer.innerHTML = `
+          <button class="blocker-btn blocker-btn-primary" id="unlock-now-btn">
+            Unlock Site Now
+          </button>
+          <button class="blocker-btn blocker-btn-secondary" id="go-back-btn-2">
+            Go Back
+          </button>
+        `;
+
+        document
+          .getElementById("unlock-now-btn")
+          ?.addEventListener("click", () => {
+            window.location.reload();
+          });
+
+        document
+          .getElementById("go-back-btn-2")
+          ?.addEventListener("click", () => {
+            window.history.back();
+          });
+      }
     } else {
       const errorDiv = document.getElementById("error-message");
       if (errorDiv) {
@@ -370,7 +403,10 @@ async function verifyKey() {
         errorDiv.style.color = "#48bb78";
         errorDiv.textContent = "✓ Key verified! Reloading...";
       }
-      // Page will reload from background script
+      // Reload the page to show the unlocked site with timer
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
     } else {
       if (errorDiv) {
         errorDiv.style.color = "#e53e3e";
@@ -394,4 +430,93 @@ function escapeHtml(text: string): string {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+function showTimerOverlay(gracePeriod: any) {
+  // Remove existing timer if any
+  const existing = document.getElementById("grace-timer-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "grace-timer-overlay";
+  overlay.innerHTML = `
+    <style>
+      #grace-timer-overlay {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 16px 24px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        z-index: 2147483647;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        min-width: 200px;
+        animation: slideIn 0.3s ease-out;
+      }
+      
+      @keyframes slideIn {
+        from {
+          transform: translateX(100%);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+      
+      .timer-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        opacity: 0.9;
+        margin-bottom: 8px;
+      }
+      
+      .timer-display {
+        font-size: 24px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      
+      .timer-key {
+        font-size: 11px;
+        margin-top: 8px;
+        opacity: 0.8;
+        font-family: monospace;
+      }
+    </style>
+    
+    <div class="timer-title">⏱️ Grace Period Active</div>
+    <div class="timer-display" id="timer-countdown">--:--</div>
+    <div class="timer-key">Key: ${gracePeriod.key}</div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  // Update countdown every second
+  const updateTimer = () => {
+    const remaining = Math.max(0, gracePeriod.expiresAt - Date.now());
+    const totalSeconds = Math.floor(remaining / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    const display = document.getElementById("timer-countdown");
+    if (display) {
+      display.textContent = `${minutes}:${String(seconds).padStart(2, "0")}`;
+    }
+
+    if (remaining <= 0) {
+      // Grace period expired, reload to show block screen
+      window.location.reload();
+    }
+  };
+
+  updateTimer();
+  const interval = setInterval(updateTimer, 1000);
+
+  // Store interval ID so it can be cleared if needed
+  (overlay as any).__timerInterval = interval;
 }
